@@ -1,18 +1,11 @@
 # Ouma Ria Smart Clock
 ### A Smart Companion for Independent Living
 
-An ESP32-based bedside clock built for one purpose: help an aging parent live independently,
+An ESP32-based  clock built for one purpose: help an aging parent live independently,
 a little longer, a little safer — without a single feature added just because it was possible.
 
 Every subsystem in this project exists because a real problem showed up in a real home first.
 There is no blinking LED here that isn't also telling someone something they needed to know.
-
----
-
-> **A note on timing:** the author is currently travelling for work and may be slower than
-> usual to respond to issues or questions over the next couple of weeks. The project itself is
-> stable — this is a timing note, not a sign of anything wrong. Bug reports and questions are
-> still very welcome; just please be patient waiting for a reply.
 
 ---
 
