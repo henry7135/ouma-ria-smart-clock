@@ -140,7 +140,7 @@ button for 3 seconds) is available as a backup, but shouldn't normally be necess
 
 ---
 
-## Pushover notifications (optional but recommended)
+## Pushover notifications 
 
 Several reminders — medicine, doctor's appointments, security alerts, the smoker and egg
 timers — can also send a notification to a phone via [Pushover](https://pushover.net), a free
