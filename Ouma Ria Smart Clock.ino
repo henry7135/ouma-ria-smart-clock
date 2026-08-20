@@ -19,7 +19,7 @@
  *  Every major feature was developed in response to a real-world need
  *  identified during daily use in the author's own home.
  *
- *
+ *  
  ******************************************************************************/
 
 /******************************************************************************
@@ -551,6 +551,7 @@ struct Evt {
 Evt      g_events[EVT_MAX];
 uint8_t  g_evt_count      = 0;
 bool     g_evt_today      = false;  // any event today (drives LED pulse)
+bool     g_evt_acked      = false;  // accept button pressed today — stop flashing
 int16_t  g_evt_days_min   = 999;    // days to the NEAREST upcoming event
 uint8_t  g_evt_last_day   = 255;    // new-day detector for purge + notify reset
 bool     g_evt_notified   = false;  // 07:00 Pushover sent today
@@ -2352,8 +2353,11 @@ void compose_bar3(void) {
   // g_evt_today / g_evt_days_min, refreshed every second in evt_check().
   if (g_evt_days_min > 3) {
     bar3_leds[FREE_BASE + 8] = CRGB::Black;
-  } else if (g_evt_today) {
+  } else if (g_evt_today && !g_evt_acked) {
     bar3_leds[FREE_BASE + 8] = ((ms / 300) % 2 == 0) ? CRGB(200, 0, 180) : CRGB::Black;
+  } else if (g_evt_today) {
+    // Acknowledged — steady soft magenta instead of flashing
+    bar3_leds[FREE_BASE + 8] = CRGB(60, 0, 54);
   } else {
     uint8_t p28 = (uint8_t)(30 + 30 * sin(ms / (g_evt_days_min == 1 ? 350.0 : (g_evt_days_min == 2 ? 700.0 : 1200.0))));
     bar3_leds[FREE_BASE + 8] = CRGB(p28, 0, (uint8_t)(p28 * 0.9));
@@ -2580,6 +2584,13 @@ void bday_check_button(void) {
       dfplayer_stop();
       Serial.println("[wekker] accepted/dismissed by button");
     }
+    // Acknowledge today's Kalender event(s) — silent (no voice track for
+    // general events), just stops the status-bar LED flashing for the rest
+    // of the day
+    if (g_evt_today && !g_evt_acked) {
+      g_evt_acked = true;
+      evt_save();
+    }
   }
   g_bday_btn_prev = btn_now;
 }
@@ -2772,6 +2783,7 @@ void evt_save(void) {
     p.putUChar (("m" + k).c_str(), g_events[i].month);
     p.putString(("n" + k).c_str(), g_events[i].desc);
   }
+  p.putBool("acked", g_evt_acked);
   p.end();
 }
 
@@ -2788,6 +2800,7 @@ void evt_load(void) {
     strncpy(g_events[i].desc, n.c_str(), sizeof(g_events[i].desc) - 1);
     g_events[i].desc[sizeof(g_events[i].desc) - 1] = '\0';
   }
+  g_evt_acked = p.getBool("acked", false);
   p.end();
 }
 
@@ -2803,10 +2816,11 @@ void evt_purge_past(void) {
 
 // Call once per second (from timekeeping, next to doc_check)
 void evt_check(void) {
-  // New day: purge yesterday's events, reset the notify flag
+  // New day: purge yesterday's events, reset the notify + accept flags
   if (g_day != g_evt_last_day) {
     g_evt_last_day  = g_day;
     g_evt_notified  = false;
+    g_evt_acked     = false;
     evt_purge_past();
   }
 
@@ -3499,7 +3513,14 @@ void web_setup(void) {
         String key = "d" + String(d);
         if(webServer.arg(key) == "1") t2mask |= (1 << d);
       }
-      g_wekker_days[slot] = t2mask ? t2mask : 0x7F;
+      // Respect the actual submitted selection, including zero days — a
+      // Wekker with no days ticked simply never matches rtc_dow() and stays
+      // silent, which is exactly what unchecking every box should mean.
+      // (Previously this silently forced an all-zero save back to "every
+      // day", overriding an explicit choice — the 0x7F fallback still
+      // protects wekker_load() against corrupted/uninitialized NVS on first
+      // boot, which is a different, legitimate concern from a real save.)
+      g_wekker_days[slot] = t2mask;
       g_wekker_fired_today[slot] = false;   // allow it to fire today if time already passed
       wekker_save();   // persist to NVS — survives reboot/power cut
     }
@@ -4946,7 +4967,7 @@ void web_setup(void) {
       {"Sw9",  "#cc2222", "RAINBOW",      "Wys die reënboog-vertoning op die hoofskerm. Enige ander knoppie skakel terug na die normale tydvertoning."},
       {"Sw10", "#3355cc", "WIFI RESET",   "Hou 3 sekondes in om die klok te herbegin (herprobeer WiFi-konneksie na kragonderbreking). Kort druk: as die rooker tans loop, wys dit vinnig hoe lank (UU:MM) op die skerm; anders doen kort druk niks. (Ou daaglikse-pille funksie is afgetree.)"},
       {"Sw11", "#ddcc22", "MEDICINE",     "Druk n&aacute; Ouma se medisyne geneem is — bevestig die dosis, oranje LED gaan groen."},
-      {"Sw12", "#dddddd", "BIRTHDAY",     "Erken 'n verjaarsdag- of doktersafspraak-herinnering. Stop ook 'n Wekker wat lui."},
+      {"Sw12", "#dddddd", "BIRTHDAY",     "Erken 'n verjaarsdag-, doktersafspraak- of kalendergebeurtenis-herinnering. Stop ook 'n Wekker wat lui."},
     };
     for (auto& r : rows) {
       page += "<div style='display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid #292929'>";
@@ -6466,6 +6487,12 @@ void sec_alarm_check_pir(void) {
     g_panic_start_ms  = millis();
     g_panic_requested = false;
     Serial.println("PANIC — SIREN ON for 15 minutes");
+    // Also sound through the clock's own onboard speaker, independent of the
+    // external siren wiring — this always plays regardless of whether the
+    // clock is in its usual spot with the siren connected, or has been moved
+    // elsewhere in the house without it (Henry's request).
+    dfplayer_volume(g_alarm_vol);
+    dfplayer_play(2); voice_lock();
     po_notify("PANIC — EMERGENCY", "Panic button pressed! Ouma needs help!\nTime: " + po_time(), 2);
     return;
   }
@@ -6521,6 +6548,8 @@ void sec_alarm_check_pir(void) {
         g_trig_zone      = 1;
         g_trig_sensor    = i;
         g_siren_start_ms = millis();
+        dfplayer_volume(g_alarm_vol);
+        dfplayer_play(2); voice_lock();
         po_notify("ALARM — INTRUDER IN COURTYARD", "Sensor: " + String(PIR_NAMES[i]) + "\nTime: " + po_time(), 2);
         return;
       }
@@ -6552,6 +6581,8 @@ void sec_alarm_check_pir(void) {
       g_trig_zone       = 2;
       g_siren_start_ms  = millis();
       Serial.println("Entry delay expired — ZONE 2 SIREN ON");
+      dfplayer_volume(g_alarm_vol);
+      dfplayer_play(2); voice_lock();
       po_notify("ALARM — INTRUDER INSIDE", "Sensor: " + String(PIR_NAMES[g_trig_sensor]) + "\nTime: " + po_time(), 2);
     }
     return;
